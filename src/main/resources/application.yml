@@ -1,0 +1,21 @@
+server:
+  port: 8002
+spring:
+  application:
+    name: yin-gateway
+  cloud:
+
+    gateway:
+      routes:
+        - id: payment_routh
+          uri: http://localhost:8090
+          predicates:
+            - Path=/api/**
+          filters:
+            - StripPrefix=0
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    reactor.netty.http.client: DEBUG
+
