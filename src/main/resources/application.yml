@@ -8,15 +8,22 @@ spring:
       discovery:
         locator:
           enabled: true
-#      routes:
-#        - id: payment_routh
-#          uri: http://localhost:8090
-#          predicates:
-#            - Path=/api/**
+      routes:
+        - id: payment_routh
+          uri: http://localhost:8090
+          predicates:
+            - Path=/api/**
 #          filters:
 #            - StripPrefix=0
+
     nacos:
+
       discovery:
+        # 是否开启服务注册，默认为 true
+        register-enabled: true
+        # 是否开启服务发现，默认为 true
+        enabled: true
+        # Nacos 注册中心地址
         server-addr: localhost:8848 #服务注册中心地址
       #        server-addr: 192.168.137.150:1111
 #      config:
@@ -31,8 +38,18 @@ spring:
 service-url:
   gateway-service-url: http://springboot-init11111
 
+
 logging:
   level:
     org.springframework.cloud.gateway: DEBUG
     reactor.netty.http.client: DEBUG
+
+
+    org:
+      springframework:
+        web:
+          reactive:
+            function:
+              client:
+                ExchangeFunctions=DEBUG:
 

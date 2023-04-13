@@ -1,12 +1,12 @@
 package com.yin.yingateway.service;
 
-import com.yin.yingateway.common.ErrorCode;
-import com.yin.yingateway.exception.BusinessException;
+import com.yin.yingateway.config.OpenFeignClientHolder;
+import io.netty.util.concurrent.Future;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.reactivestreams.Publisher;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
@@ -18,11 +18,11 @@ import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import javax.annotation.Resource;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,15 +36,15 @@ import java.util.Map;
  */
 @Component
 @Slf4j
-public class UserApiGateway implements GatewayFilter , Ordered {
-    private final WebClient webClient;
+public class UserApiGateway implements GlobalFilter, Ordered {
+
+    // @Resource
+    // RestTemplate restTemplate;
 
 
-    public UserApiGateway(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.build();
-    }
-    @Value("${service-url.gateway-service-url}")
-    private String PATH_GATEWAY_SERVICE_URL;
+    @Resource
+    OpenFeignClientHolder clientHolder;
+
     // @Resource
     // RestTemplate restTemplate;
 
@@ -106,52 +106,36 @@ public class UserApiGateway implements GatewayFilter , Ordered {
 
         // 直接将经过计算的apiSign传到服务器，在数据库中查找
         // 在yinapi那写出方法，在这里直接比较
-        String urlApiSign = PATH_GATEWAY_SERVICE_URL + "/api/requestGateway/invokeApiSign/" + apiSign;
-        Mono<Boolean> booleanMono = webClient
-                .get()
-                .uri(urlApiSign)
-                .retrieve()
-                .bodyToMono(Boolean.class)
-                .map(result->{
-                    if (!result){
-                        throw new BusinessException(ErrorCode.PARAMS_ERROR);
-                    }
-                    return true;
-                });
+
+        try {
+            clientHolder.invokeApiSign(apiSign);
+
+        }catch (Exception e){
+            System.out.println("except:=====>"+e);
+        }
 
 
         // 添加传过来的时间戳一起计算，作比较，
         // 在yinapi那写出方法，在这里直接比较
         String genSign = headers.getFirst("genSign");
-        String urlGenSign = PATH_GATEWAY_SERVICE_URL + "/api/requestGateway/checkTimeStamp/" + accessKey + "/" + timeStamp + "/" + genSign;
-        webClient
-                .get()
-                .uri(urlGenSign)
-                .retrieve()
-                .bodyToMono(Boolean.class)
-                .map(result->{
-                    if (!result){
-                        throw new BusinessException(ErrorCode.PARAMS_ERROR);
-                    }
-                    return true;
-                });
 
+        try {
+            clientHolder.checkTimeStamp(timeStamp, genSign, accessKey);
+
+        }catch (Exception e){
+            System.out.println("except:=====>"+e);
+        }
+
+        System.out.println("开始访问频率");
 
         // 访问频率
-        String urlRequestFrequency = PATH_GATEWAY_SERVICE_URL+"/api/requestGateway/isFrequenceAllowed/"
-                +apiSign +"/"
-                +timeStamp;
-        webClient
-                .get()
-                .uri(urlRequestFrequency)
-                .retrieve()
-                .bodyToMono(Boolean.class)
-                .map(result->{
-                    if (!result){
-                        throw new BusinessException(ErrorCode.FORBIDDEN_ERROR,"访问频率过快");
-                    }
-                    return true;
-                });
+        try {
+            clientHolder.isFrequenceAllowed(apiSign, Long.valueOf(timeStamp));
+
+        }catch (Exception e){
+            System.out.println("except:=====>"+e);
+        }
+
 
         map.put("apiSign", apiSign);
 
@@ -163,12 +147,12 @@ public class UserApiGateway implements GatewayFilter , Ordered {
 
     public Mono<Void> handleResponse(ServerWebExchange exchange, GatewayFilterChain chain, String apiSign) {
         try {
+
             ServerHttpResponse originalResponse = exchange.getResponse();
             // 缓存数据的工厂
             DataBufferFactory bufferFactory = originalResponse.bufferFactory();
             // 拿到响应码
             HttpStatus statusCode = originalResponse.getStatusCode();
-
             if (statusCode == HttpStatus.OK) {
                 // 装饰，增强能力
                 ServerHttpResponseDecorator decoratedResponse = new ServerHttpResponseDecorator(originalResponse) {
@@ -185,19 +169,11 @@ public class UserApiGateway implements GatewayFilter , Ordered {
                                         // 7. 调用成功，接口调用次数 + 1 invokeCount
                                         try {
                                             // invokeCount/{apiSign}
-                                            String urlCount = PATH_GATEWAY_SERVICE_URL+"/api/requestGateway/invokeCount"+apiSign;
-                                            // 计数统计
-                                            webClient
-                                                    .get()
-                                                    .uri(urlCount)
-                                                    .retrieve()
-                                                    .bodyToMono(Boolean.class)
-                                                    .map(result->{
-                                                        if (!result){
-                                                            throw new BusinessException(ErrorCode.PARAMS_ERROR);
-                                                        }
-                                                        return true;
-                                                    });
+                                             // 计数统计
+
+                                            Future<Boolean> booleanFuture = clientHolder.invokeCount(apiSign);
+                                            Boolean aBoolean = booleanFuture.get();
+                                            System.out.println(aBoolean);
 
                                         } catch (Exception e) {
                                             log.error("invokeCount error", e);
@@ -231,6 +207,22 @@ public class UserApiGateway implements GatewayFilter , Ordered {
             return chain.filter(exchange);
         }
     }
+
+    @Data
+    public static class InstanceList {
+        private List<Instance> hosts;
+    }
+
+    @Data
+    public static class Instance {
+        private String ip;
+        private int port;
+    }
+
+
+
+
+
 
 
 }
