@@ -1,9 +1,10 @@
 package com.yin.yingateway.service;
 
-import com.yin.yingateway.config.OpenFeignClientHolder;
-import io.netty.util.concurrent.Future;
+
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.Reference;
+import org.example.server.GatewayRequestService;
 import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -22,13 +23,10 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import javax.annotation.Resource;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-
+ 
 /**
  * Author: yin7331
  * Date: 2023/4/7 22:38
@@ -38,12 +36,9 @@ import java.util.Map;
 @Slf4j
 public class UserApiGateway implements GlobalFilter, Ordered {
 
-    // @Resource
-    // RestTemplate restTemplate;
+    @Reference
+    GatewayRequestService gatewayRequestService;
 
-
-    @Resource
-    OpenFeignClientHolder clientHolder;
 
     // @Resource
     // RestTemplate restTemplate;
@@ -57,14 +52,60 @@ public class UserApiGateway implements GlobalFilter, Ordered {
         // TODO 主要是对IP和请求头是否合法做校验，这里先放一放
 
         // 4．用户鉴权(判断ak、sk 是否存在，合法，频率是否过快)
-        Map headerInpo = this.accountAPI(exchange);
+        ServerHttpRequest request = exchange.getRequest();
+        ServerHttpResponse response = exchange.getResponse();
+        HttpHeaders headers = request.getHeaders();
+        String accessKey = headers.getFirst("accessKey");
+        String requestId = headers.getFirst("requestId");
+        String timeStamp = headers.getFirst("timeStamp");
+        String apiSign = headers.getFirst("apiSign");
 
-        if (headerInpo == null) {
-            // TODO 这里验证失败，想个返回值
-            // return null;
+        // 直接将经过计算的apiSign传到服务器，在数据库中查找
+        // 在yinapi那写出方法，在这里直接比较
+
+        // try {
+        try {
+            Boolean aBoolean = 
+                    gatewayRequestService.invokeApiSign(apiSign);
+            if (aBoolean!=true){
+                return handleNoAuth(response);
+            }
+            // a = clientHolder.invokeApiSign(apiSign).get();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        System.out.println("invokeApiSign=====end");
+
+        // 添加传过来的时间戳一起计算，作比较，
+        // 在yinapi那写出方法，在这里直接比较
+        String genSign = headers.getFirst("genSign");
+
+        try {
+            Boolean aBoolean = gatewayRequestService.checkTimeStamp(timeStamp, genSign, accessKey);
+            if (aBoolean!=true){
+                return handleNoAuth(response);
+            }
+            // clientHolder.checkTimeStamp(timeStamp, genSign, accessKey);
+        }catch (Exception e){
+            System.out.println("except:=====>"+e);
         }
 
-        String apiSign = (String) headerInpo.get("apiSign");
+        System.out.println("checkTimeStamp=====end");
+
+        // 访问频率
+        try {
+            Boolean frequenceAllowed = gatewayRequestService.isFrequenceAllowed(apiSign,
+                    Long.valueOf(timeStamp));
+            if (frequenceAllowed!=true){
+                return handleNoAuth(response);
+            }
+            // clientHolder.isFrequenceAllowed(apiSign, Long.valueOf(timeStamp));
+
+        }catch (Exception e){
+            System.out.println("except:=====>"+e);
+        }
+        System.out.println("isFrequenceAllowed=====end");
+
 
         System.out.println("===>>>应该是过完了");
         return handleResponse(exchange, chain, apiSign);
@@ -92,56 +133,10 @@ public class UserApiGateway implements GlobalFilter, Ordered {
         log.info("请求来源地址：" + sourceAddress);
         log.info("请求来源地址：" + request.getRemoteAddress());
     }
-
-    public Map accountAPI(ServerWebExchange exchange) {
-        ServerHttpRequest request = exchange.getRequest();
-        HttpHeaders headers = request.getHeaders();
-
-        Map map = new HashMap<>();
-
-        String accessKey = headers.getFirst("accessKey");
-        String requestId = headers.getFirst("requestId");
-        String timeStamp = headers.getFirst("timeStamp");
-        String apiSign = headers.getFirst("apiSign");
-
-        // 直接将经过计算的apiSign传到服务器，在数据库中查找
-        // 在yinapi那写出方法，在这里直接比较
-
-        try {
-            clientHolder.invokeApiSign(apiSign);
-
-        }catch (Exception e){
-            System.out.println("except:=====>"+e);
-        }
-
-
-        // 添加传过来的时间戳一起计算，作比较，
-        // 在yinapi那写出方法，在这里直接比较
-        String genSign = headers.getFirst("genSign");
-
-        try {
-            clientHolder.checkTimeStamp(timeStamp, genSign, accessKey);
-
-        }catch (Exception e){
-            System.out.println("except:=====>"+e);
-        }
-
-        System.out.println("开始访问频率");
-
-        // 访问频率
-        try {
-            clientHolder.isFrequenceAllowed(apiSign, Long.valueOf(timeStamp));
-
-        }catch (Exception e){
-            System.out.println("except:=====>"+e);
-        }
-
-
-        map.put("apiSign", apiSign);
-
-        return map;
-
-
+    
+    public Mono<Void> handleNoAuth(ServerHttpResponse response) {
+        response.setStatusCode(HttpStatus.FORBIDDEN);
+        return response.setComplete();
     }
 
 
@@ -170,10 +165,8 @@ public class UserApiGateway implements GlobalFilter, Ordered {
                                         try {
                                             // invokeCount/{apiSign}
                                              // 计数统计
-
-                                            Future<Boolean> booleanFuture = clientHolder.invokeCount(apiSign);
-                                            Boolean aBoolean = booleanFuture.get();
-                                            System.out.println(aBoolean);
+                                            Boolean aBoolean1 = gatewayRequestService.invokeCount(apiSign);
+                                            System.out.println(aBoolean1);
 
                                         } catch (Exception e) {
                                             log.error("invokeCount error", e);
